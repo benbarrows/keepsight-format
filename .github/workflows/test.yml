@@ -4,10 +4,16 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # ubuntu-latest is Ubuntu 26.04, which has no Python 3.9 build; 3.9 runs on 24.04.
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python: ["3.9", "3.13"]
+        include:
+          - python: "3.9"
+            os: ubuntu-24.04
+          - python: "3.13"
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
