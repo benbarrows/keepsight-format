@@ -1007,6 +1007,30 @@ class Limits(Case):
         files["coverage.json"] = b"[" + b"{}," * kp.MAX_CONTAINERS + b"{}]"
         self.assertProblem(self.relisted(files, "coverage.json"), "coverage.json: not JSON")
 
+    def test_many_notes_that_disagree_are_checked_fast(self):
+        # Every note names one other: one lookup each, not a walk through all the ids.
+        count = kp.MAX_RECORDS
+        notes = [
+            {"id": f"obs-{n}", "facts": {"disagrees_with": [f"obs-{(n + count // 2) % count}"]}}
+            for n in range(count)
+        ]
+        report = kp.Report("upload", "2.0")
+        started = time.monotonic()
+        kp._check_disagreements(notes, "observations.jsonl record", report)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(report.problems, [])
+
+    def test_a_note_disagreeing_with_something_that_is_not_an_id(self):
+        for named in (2, None, ["obs-2"], {"id": "obs-2"}):
+            notes = [
+                {"id": "obs-1", "facts": {"disagrees_with": [named]}},
+                {"id": "obs-2", "facts": {"disagrees_with": ["obs-1"]}},
+            ]
+            report = kp.Report("upload", "2.0")
+            kp._check_disagreements(notes, "observations.jsonl record", report)
+            self.assertEqual(len(report.problems), 1, named)
+            self.assertIn("record 1: facts name a note", report.problems[0])
+
     def test_problems_are_listed_up_to_a_limit(self):
         files = upload_files()
         files["transcript.jsonl"] = b"x\n" * 500

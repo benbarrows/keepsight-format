@@ -771,11 +771,13 @@ def _check_disagreements(notes: list, label: str, report) -> None:
     them; 3.4.1 says to keep such a note): only an id that is named and wrong fails.
     """
     ids = [n.get("id") if isinstance(n, dict) else None for n in notes]
+    known = {i for i in ids if isinstance(i, str)}  # a set: one lookup per id named
     for number, note in enumerate(notes, 1):
         facts = note.get("facts") if isinstance(note, dict) else None
         others = facts.get("disagrees_with") if isinstance(facts, dict) else None
         if isinstance(others, list) and any(
-            other not in ids or other == ids[number - 1] for other in others
+            not isinstance(other, str) or other not in known or other == ids[number - 1]
+            for other in others
         ):
             report.fail(f"{label} {number}: facts name a note that is not in the file")
 
