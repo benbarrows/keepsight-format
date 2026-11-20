@@ -261,6 +261,45 @@ def raw_zip(files, *, prefix=b"", hidden=b"", comment=b"", change=None) -> bytes
     return bytes(out)
 
 
+FACTS = {
+    "frame": True,
+    "passes_read": 2,
+    "passes_noted": 1,
+    "passes_same_words": 1,
+    "disagrees_with": ["obs-2"],
+    "shortened": False,
+}
+
+
+def with_disagreeing_notes(files, second="obs-2", names=None):
+    """The package's note and a second one, naming each other in facts (SPEC 3.4.1); the
+    second names `names` instead when given."""
+    (row,) = [json.loads(x) for x in files["observations.jsonl"].splitlines()]
+    link = "watch_url" in row
+    facts = dict(FACTS, frame=not link)
+    first = dict(row, facts=dict(facts, disagrees_with=[second]))
+    other = dict(
+        row,
+        id=second,
+        text="A slide, read another way.",
+        facts=dict(facts, disagrees_with=[names or row["id"]]),
+    )
+    files["observations.jsonl"] = line([first, other])
+    if link:
+        edit_json(files, "manifest.json", lambda m: m.update(observations=[]))
+    else:
+
+        def relist(e):
+            e["record_counts"]["observations.jsonl"] = 2
+            for f in e["files"]:
+                if f["path"] == "observations.jsonl":
+                    data = files["observations.jsonl"]
+                    f.update(sha256=sha(data), bytes=len(data))
+
+        edit_json(files, "export.json", relist)
+    return files
+
+
 class Case(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -384,6 +423,40 @@ class Upload(Case):
         edit_json(files, "export.json", lambda e: e.update(added_later={"x": 1}))
         self.assertTrue(self.report(files).ok)
 
+    def test_notes_carry_their_facts(self):
+        files = with_disagreeing_notes(upload_files())
+        self.assertTrue(self.report(files).ok, self.report(files).problems)
+        notes = kp.Package.open(self.write(files)).notes()
+        self.assertEqual(notes[0]["facts"], dict(FACTS, disagrees_with=["obs-2"]))
+
+    def test_a_note_disagreeing_with_a_note_that_is_not_there(self):
+        files = with_disagreeing_notes(upload_files(), names="obs-9")
+        self.assertProblem(files, "observations.jsonl record 2: facts name a note")
+
+    def test_a_note_disagreeing_with_itself(self):
+        files = with_disagreeing_notes(upload_files(), names="obs-2")
+        self.assertProblem(files, "observations.jsonl record 2: facts name a note")
+
+    def test_facts_of_a_shape_this_reader_does_not_know_are_kept(self):
+        # SPEC 3.4.1: a later version may change the facts; keep the note, do not refuse.
+        files = with_disagreeing_notes(upload_files())
+        later = {"passes_read": None, "disagrees_with": "obs-2", "checked": "matched"}
+        first, second = [json.loads(x) for x in files["observations.jsonl"].splitlines()]
+        rows = [dict(first, facts=later), dict(second, facts=dict(later, disagrees_with=None))]
+        files["observations.jsonl"] = line(rows)
+        edit_json(
+            files,
+            "export.json",
+            lambda e: [
+                f.update(
+                    sha256=sha(files["observations.jsonl"]), bytes=len(files["observations.jsonl"])
+                )
+                for f in e["files"]
+                if f["path"] == "observations.jsonl"
+            ],
+        )
+        self.assertTrue(self.report(files).ok, self.report(files).problems)
+
 
 class Link(Case):
     def test_a_well_formed_package_verifies(self):
@@ -460,6 +533,17 @@ class Link(Case):
             b'"evidence_ids": []', b'"evidence_ids": ["ev-x"]'
         )
         self.assertProblem(files, "observations.jsonl line 1: a link package holds no frames")
+
+    def test_notes_carry_their_facts(self):
+        files = with_disagreeing_notes(link_files(), second="obs-0002")
+        self.assertTrue(self.report(files).ok, self.report(files).problems)
+        notes = kp.Package.open(self.write(files)).notes()
+        self.assertEqual(notes[1]["facts"]["disagrees_with"], ["obs-0001"])
+        self.assertFalse(notes[1]["facts"]["frame"])
+
+    def test_a_note_disagreeing_with_a_note_that_is_not_there(self):
+        files = with_disagreeing_notes(link_files(), second="obs-0002", names="obs-9")
+        self.assertProblem(files, "observations.jsonl line 2: facts name a note")
 
 
 class Malformed(Case):

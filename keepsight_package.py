@@ -715,10 +715,17 @@ def verify_upload(container: Container, version: str) -> Report:
         report.fail("export.json has no record_counts")
         counts = {}
     record_ids: set[str] = set()
+    notes: list[dict] = []
     for name in ("observations.jsonl", "transcript.jsonl", "timeline.jsonl"):
         rows = _jsonl(container, name, report)
         if not _is_int(counts.get(name)) or counts[name] != len(rows):
             report.fail(f"{name}: {len(rows)} records, export.json says {counts.get(name)!r}")
+        if name == "observations.jsonl":
+            # Only what the disagreement check needs, so the rows can still go.
+            notes = [
+                {"id": row.get("id"), "facts": row.get("facts")} if isinstance(row, dict) else None
+                for row in rows
+            ]
         for number, row in enumerate(rows, 1):
             if not _span_ok(row, duration):
                 report.fail(f"{name} record {number}: times missing, reversed or past the video")
@@ -739,6 +746,7 @@ def verify_upload(container: Container, version: str) -> Report:
                 report.fail(f"{name} record {number}: names evidence the package does not have")
         report.checked.append(f"{len(rows)} records in {name}")
         del rows  # one file's rows in memory at a time
+    _check_disagreements(notes, "observations.jsonl record", report)
 
     coverage = _json(container, "coverage.json", report)
     if not isinstance(coverage, dict) or not _is_int(coverage.get("duration_us")):
@@ -754,6 +762,22 @@ def verify_upload(container: Container, version: str) -> Report:
             "are not checked; export.json is what this ZIP is verified against."
         )
     return report
+
+
+def _check_disagreements(notes: list, label: str, report) -> None:
+    """SPEC 3.4.1: a note's facts.disagrees_with names other notes of the same file.
+
+    Facts of a shape this reader does not know are left alone (a later version may change
+    them; 3.4.1 says to keep such a note): only an id that is named and wrong fails.
+    """
+    ids = [n.get("id") if isinstance(n, dict) else None for n in notes]
+    for number, note in enumerate(notes, 1):
+        facts = note.get("facts") if isinstance(note, dict) else None
+        others = facts.get("disagrees_with") if isinstance(facts, dict) else None
+        if isinstance(others, list) and any(
+            other not in ids or other == ids[number - 1] for other in others
+        ):
+            report.fail(f"{label} {number}: facts name a note that is not in the file")
 
 
 # --------------------------------------------------------------------------- link layout
@@ -903,6 +927,7 @@ def verify_link(container: Container, version: str) -> Report:
             ids.add(key)
             if note.get("evidence_ids") not in ([], None):
                 report.fail(f"observations.jsonl line {number}: a link package holds no frames")
+        _check_disagreements(notes, "observations.jsonl line", report)
         report.checked.append(f"{len(notes)} on-screen notes")
     if analysis.get("source_bytes") != "not_held_by_keepsight":
         report.notes.append("manifest.json does not say the video's bytes were not held")
@@ -1010,11 +1035,14 @@ class Package:
     def notes(self) -> list[dict]:
         """What was on screen or happened: start_us, end_us, category, text, and frames
         (paths of included still images that back the note; uploads only) or watch_url
-        (links: the public video opened at that second)."""
+        (links: the public video opened at that second); facts where the package has them
+        (SPEC 3.4.1)."""
         paths = {asset["id"]: asset["path"] for asset in self._pictures()}
         notes = []
         for r in self._rows("observations.jsonl"):
             note = {k: r.get(k) for k in ("start_us", "end_us", "category", "text")}
+            if "facts" in r:
+                note["facts"] = r["facts"]
             if self.layout == "upload":
                 note["frames"] = [paths[i] for i in r.get("evidence_ids", []) if i in paths]
             else:

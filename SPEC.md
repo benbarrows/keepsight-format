@@ -189,10 +189,33 @@ Each line is one record:
 | `uncertainty` | descriptive |
 | `supersedes` | ids of records this one replaces |
 | `derivation` | opaque provenance. `derivation.independently_verified` is `false` for every model record |
+| `facts` | optional; on every note since November 2026: what Keepsight knows about the note (3.4.1) |
 
 To show a note with its picture: for each id in `evidence_ids`, find the asset in
 `manifest.json`; if `export.json` marks it `included` and its `kind` is `frame` or `crop`,
 its `path` is the image.
+
+### 3.4.1 A note's facts
+
+A long video is read in overlapping requests, so two requests often see the same moment and
+both note what was on screen. Since November 2026 each note in `observations.jsonl` carries
+`facts`, plain counts and flags Keepsight knows for certain. None of them is a confidence
+score, and none says the note is right.
+
+| Field | Meaning |
+|---|---|
+| `frame` | `true` when a still frame taken while the note was on screen backs it (it is in `evidence_ids`). Always `false` in the link layout |
+| `passes_read` | how many requests that answered covered at least five seconds of the note's span (all of it, when shorter). 1 when one request read the whole video |
+| `passes_noted` | how many of those returned this note. Below `passes_read` is normal and says nothing against the note: another request's wording of the same thing is often a separate note nearby, when the two did not match closely enough to join, and a request whose notes were left out because their times could not be trusted still counts as having read the moment |
+| `passes_same_words` | how many of the copies joined into this note have the same distinctive words as its `text`; the only count that says copies agree. Fewer than `passes_noted` means another request said less, or something else, and the fuller copy was kept |
+| `disagrees_with` | ids of other notes in the same file that another request returned for the same thing with, in the same place of its text, a different number, or, in quoted screen text, a word read differently. Each such note names this one back. One of the readings is wrong, or the screen changed between them; the frame or the video shows which. Not every difference is caught: a copy that only adds or leaves out words, a different word that is not a near spelling, or a word under four letters read differently can still be joined into one note |
+| `shortened` | `true` when Keepsight removed words from the model's text (a remark about a request's own cut start or end). The model can shorten a long screen itself, and says so in `text`; that is not detected |
+
+Keepsight writes `passes_read >= passes_noted >= passes_same_words >= 1`. Notes made before facts
+existed have no `facts`, and a note whose facts could not be worked out is written without them;
+a reader MUST NOT treat a missing `facts` as any value. Later versions can add keys to `facts`
+(2.4), and a reader SHOULD keep a note whose `facts` it does not understand rather than refuse
+the package.
 
 ### 3.5 timeline.jsonl
 
@@ -275,8 +298,9 @@ Everything under `analysis` not listed here, and every other field, is opaque.
 
 One note per line: `id`, `start_us`, `end_us`, `category` (as in 3.4, without
 `derived_transcription`), `modality`, `text`, `uncertainty`, `watch_url` (the public video
-opened at that second), `evidence_ids` (always empty: there is no frame to point at), and an
-opaque `derivation`.
+opened at that second), `evidence_ids` (always empty: there is no frame to point at), `facts`
+(3.4.1; `frame` is always `false`, `disagrees_with` names ids in this file) when present, and
+an opaque `derivation`.
 
 ## 5. Verifying a package
 
@@ -302,7 +326,8 @@ other. Section 6 says what it does not tell you.
    MUST hold that many records. Every record MUST have a valid span
    (2.1). Every observation and transcript record MUST have a `text` string, an id that is a
    string unique across both files, and an `evidence_ids` list whose every entry is a string
-   naming an asset or reference in the manifest.
+   naming an asset or reference in the manifest. Every id in a note's
+   `facts.disagrees_with` MUST name another record of `observations.jsonl`.
 8. `coverage.json` MUST be an object whose `duration_us` equals the manifest's.
 9. Every file 3.1 marks as required MUST be present. `transcript.vtt`, if present, MUST be
    UTF-8 with `\n` line ends and no byte order mark, and its first line MUST be `WEBVTT`,
@@ -337,7 +362,8 @@ manifest. One who rewrites both is not caught (see 6).
    U+202F, U+205F and U+3000.
 7. If `manifest.json` `observations` is not empty, `observations.jsonl` MUST hold the same
    notes (times and text) in the same order. Every note MUST have a valid span, a `text`
-   string, a unique string `id`, and an `evidence_ids` that is empty, `null` or absent.
+   string, a unique string `id`, and an `evidence_ids` that is empty, `null` or absent, and
+   every id in its `facts.disagrees_with` MUST name another note of the file.
 
 In this layout `manifest.json`, the transcript and the notes have no recorded checksum. They
 are checked against each other and by the ZIP's CRC-32, which catches damage but not a
@@ -362,6 +388,7 @@ deliberate edit.
 | Upload | export `2.0`, November 2026 | some internal accounting fields are no longer exported; hosted exports state `kept_until_deleted`; `provenance.json` explains its hashes. Packages exported earlier carry extra fields, which readers ignore (2.4) |
 | Link | `youtube-evidence-gemini-url-v1` | first link packages; the model's notes only inside `analysis.json`; up to four YouTube images |
 | Link | `youtube-evidence-gemini-url-v2` | since November 9, 2026: `observations.jsonl`, and the cover as the only image |
+| Both | unchanged, November 2026 | notes carry `facts` (3.4.1). Packages made earlier have none; readers that ignore it lose nothing |
 
 ## 8. Known gaps and plans
 
